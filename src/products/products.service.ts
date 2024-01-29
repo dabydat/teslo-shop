@@ -41,14 +41,23 @@ export class ProductsService {
       product = await this.productRepository.findOneBy({ slug: term })
     }
     const queryBuilder = this.productRepository.createQueryBuilder();
-    product = await queryBuilder.where('title =:title or slug=:slug', { title: term, slug: term, }).getOne();
-    // const product = await this.productRepository.findOneBy({ id });
+    product = await queryBuilder.where('title ilike :title or slug ilike :slug', { title: term, slug: term, }).getOne();
     if (!product) throw new NotFoundException(`Product with id ${term} not found`);
     return product
   }
 
-  update(id: string, updateProductDto: UpdateProductDto) {
-    return `This action updates a #${id} product`;
+  async update(id: string, updateProductDto: UpdateProductDto) {
+    const product = await this.productRepository.preload({
+      id: id,
+      ...updateProductDto
+    });
+    if (!product) throw new NotFoundException(`Product with id ${id} not found`);
+    try {
+      await this.productRepository.save(product);
+      return product;
+    } catch (error) {
+      this.handleDBExceptions(error)
+    }
   }
 
   async remove(id: string) {

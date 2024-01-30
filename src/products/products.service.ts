@@ -6,6 +6,7 @@ import { Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
 import { PaginationDto } from 'src/common/dtos/pagination.dto';
 import { validate as isUUID } from 'uuid';
+import { ProductImage } from './entities';
 
 
 @Injectable()
@@ -13,13 +14,20 @@ export class ProductsService {
 
   private readonly logger = new Logger('ProductsService')
 
-  constructor(@InjectRepository(Product) private readonly productRepository: Repository<Product>) { }
+  constructor(
+    @InjectRepository(Product) private readonly productRepository: Repository<Product>,
+    @InjectRepository(ProductImage) private readonly productImageRepository: Repository<ProductImage>
+  ) { }
 
   async create(createProductDto: CreateProductDto) {
     try {
-      const product = this.productRepository.create(createProductDto)
+      const { images, ...productDetails } = createProductDto
+      const product = this.productRepository.create({
+        ...productDetails,
+        images: images.map(image => this.productImageRepository.create({ url: image }))
+      })
       await this.productRepository.save(product);
-      return product;
+      return { ...product, images };
     } catch (error) {
       this.handleDBExceptions(error)
     }
@@ -27,7 +35,19 @@ export class ProductsService {
 
   async findAll(paginationDto: PaginationDto) {
     const { limit = 10, offset = 0 } = paginationDto;
-    return await this.productRepository.find({ take: limit, skip: offset });
+    const products = await this.productRepository.find({ take: limit, skip: offset, relations: { images: true } });
+    return products.map(product => ({
+      ...product,
+      images: product.images.map(img => img.url)
+    }))
+  }
+
+  async findOnePlain(term: string) {
+    const { images = [], ...rest } = await this.findOne(term);
+    return {
+      ...rest,
+      images: images.map(image => image.url)
+    }
   }
 
   async findOne(term: string) {
@@ -38,10 +58,13 @@ export class ProductsService {
     }
 
     if (!product) {
-      product = await this.productRepository.findOneBy({ slug: term })
+      const queryBuilder = this.productRepository.createQueryBuilder('prod');
+      product = await queryBuilder
+        .where('title ilike :title or slug ilike :slug', { title: term, slug: term })
+        .leftJoinAndSelect('prod.images', 'prodImages')
+        .getOne();
     }
-    const queryBuilder = this.productRepository.createQueryBuilder();
-    product = await queryBuilder.where('title ilike :title or slug ilike :slug', { title: term, slug: term, }).getOne();
+
     if (!product) throw new NotFoundException(`Product with id ${term} not found`);
     return product
   }
@@ -49,7 +72,8 @@ export class ProductsService {
   async update(id: string, updateProductDto: UpdateProductDto) {
     const product = await this.productRepository.preload({
       id: id,
-      ...updateProductDto
+      ...updateProductDto,
+      images: []
     });
     if (!product) throw new NotFoundException(`Product with id ${id} not found`);
     try {
